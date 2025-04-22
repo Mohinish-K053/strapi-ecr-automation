@@ -9,3 +9,8 @@ variable "app_name" {
 variable "container_port" {
   default = 1337
 }
+
+variable "ecr_image_uri" {
+  description = "ECR image URI for the Docker image"
+  type        = string
+}
