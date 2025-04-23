@@ -32,7 +32,7 @@ resource "aws_lb_target_group" "strapi_tg" {
 
 resource "aws_lb_listener" "strapi_listener" {
   load_balancer_arn = aws_lb.strapi_alb.arn
-  port              = 80
+  port              = 1337
   protocol          = "HTTP"
 
   default_action {
@@ -46,8 +46,8 @@ resource "aws_security_group" "alb_sg" {
   vpc_id = data.aws_vpc.default.id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
+    from_port   = 1337
+    to_port     = 1337
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
