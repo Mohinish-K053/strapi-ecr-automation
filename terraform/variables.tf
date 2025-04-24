@@ -15,8 +15,4 @@ variable "ecr_image_uri" {
   type        = string
 }
 
-variable "aws_region" {
-  description = "AWS Region"
-  default     = "us-east-1" # or your desired region
-}
 
