@@ -1,26 +1,49 @@
-data "aws_vpc" "default" {
-  default = true
-}
-
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
-}
-
-# CloudWatch Log Group
-resource "aws_cloudwatch_log_group" "strapi_logs" {
-  name              = "/ecs/strapi"
-  retention_in_days = 7
-}
-
 resource "aws_ecr_repository" "strapi_repo" {
   name = "strapi-repo"
 }
 
 resource "aws_ecs_cluster" "strapi_cluster" {
   name = "strapi-cluster"
+}
+
+resource "aws_cloudwatch_log_group" "strapi_logs" {
+  name              = "/ecs/strapi"
+  retention_in_days = 7
+}
+
+resource "aws_lb" "strapi_alb" {
+  name               = "strapi-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = data.aws_subnets.default.ids
+}
+
+resource "aws_lb_target_group" "strapi_tg" {
+  name        = "strapi-tg"
+  port        = var.container_port
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = data.aws_vpc.default.id
+  health_check {
+    path                = "/"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 5
+    unhealthy_threshold = 2
+    matcher             = "200-399"
+  }
+}
+
+resource "aws_lb_listener" "strapi_listener" {
+  load_balancer_arn = aws_lb.strapi_alb.arn
+  port              = 1337
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.strapi_tg.arn
+  }
 }
 
 resource "aws_security_group" "alb_sg" {
@@ -61,39 +84,14 @@ resource "aws_security_group" "task_sg" {
   }
 }
 
-resource "aws_lb" "strapi_alb" {
-  name               = "strapi-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = data.aws_subnets.default.ids
+data "aws_vpc" "default" {
+  default = true
 }
 
-resource "aws_lb_target_group" "strapi_tg" {
-  name        = "strapi-tg"
-  port        = var.container_port
-  protocol    = "HTTP"
-  target_type = "ip"
-  vpc_id      = data.aws_vpc.default.id
-
-  health_check {
-    path                = "/"
-    interval            = 30
-    timeout             = 5
-    healthy_threshold   = 5
-    unhealthy_threshold = 2
-    matcher             = "200-399"
-  }
-}
-
-resource "aws_lb_listener" "strapi_listener" {
-  load_balancer_arn = aws_lb.strapi_alb.arn
-  port              = var.container_port
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.strapi_tg.arn
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
 }
 
@@ -126,30 +124,32 @@ resource "aws_ecs_task_definition" "strapi_task" {
   memory                   = "512"
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
 
-  container_definitions = jsonencode([{
-    name      = "strapi"
-    image     = var.ecr_image_uri
-    essential = true
-    portMappings = [{
-      containerPort = var.container_port
-      hostPort      = var.container_port
-    }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = aws_cloudwatch_log_group.strapi_logs.name
-        awslogs-region        = var.aws_region
-        awslogs-stream-prefix = "ecs/strapi"
+  container_definitions = jsonencode([
+    {
+      name  = "strapi"
+      image = var.ecr_image_uri
+      essential = true
+      portMappings = [{
+        containerPort = var.container_port
+        hostPort      = var.container_port
+      }]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.strapi_logs.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "strapi"
+        }
       }
+      environment = [
+        { name = "APP_KEYS",             value = "${join(",", [for i in range(4) : base64encode(uuid())])}" },
+        { name = "API_TOKEN_SALT",       value = "${base64encode(uuid())}" },
+        { name = "ADMIN_JWT_SECRET",     value = "${base64encode(uuid())}" },
+        { name = "TRANSFER_TOKEN_SALT",  value = "${base64encode(uuid())}" },
+        { name = "JWT_SECRET",           value = "${base64encode(uuid())}" }
+      ]
     }
-    environment = [
-      { name = "APP_KEYS",             value = "${join(",", [for i in range(4) : base64encode(uuid())])}" },
-      { name = "API_TOKEN_SALT",       value = "${base64encode(uuid())}" },
-      { name = "ADMIN_JWT_SECRET",     value = "${base64encode(uuid())}" },
-      { name = "TRANSFER_TOKEN_SALT",  value = "${base64encode(uuid())}" },
-      { name = "JWT_SECRET",           value = "${base64encode(uuid())}" }
-    ]
-  }])
+  ])
 }
 
 resource "aws_ecs_service" "strapi_service" {
@@ -158,25 +158,21 @@ resource "aws_ecs_service" "strapi_service" {
   task_definition = aws_ecs_task_definition.strapi_task.arn
   desired_count   = 1
   launch_type     = "FARGATE"
-
   network_configuration {
-    subnets          = data.aws_subnets.default.ids
-    security_groups  = [aws_security_group.task_sg.id]
+    subnets         = data.aws_subnets.default.ids
+    security_groups = [aws_security_group.task_sg.id]
     assign_public_ip = true
   }
-
   load_balancer {
     target_group_arn = aws_lb_target_group.strapi_tg.arn
     container_name   = "strapi"
     container_port   = var.container_port
   }
-
   depends_on = [aws_lb_listener.strapi_listener]
 }
 
-# CloudWatch Alarms
-resource "aws_cloudwatch_metric_alarm" "high_cpu" {
-  alarm_name          = "Strapi-High-CPU"
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  alarm_name          = "HighCPUUtilization"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
   metric_name         = "CPUUtilization"
@@ -184,15 +180,15 @@ resource "aws_cloudwatch_metric_alarm" "high_cpu" {
   period              = 60
   statistic           = "Average"
   threshold           = 80
-  alarm_description   = "Alarm if CPU > 80%"
+  alarm_description   = "Alarm when ECS CPU exceeds 80%"
   dimensions = {
     ClusterName = aws_ecs_cluster.strapi_cluster.name
     ServiceName = aws_ecs_service.strapi_service.name
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "high_memory" {
-  alarm_name          = "Strapi-High-Memory"
+resource "aws_cloudwatch_metric_alarm" "memory_high" {
+  alarm_name          = "HighMemoryUtilization"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
   metric_name         = "MemoryUtilization"
@@ -200,37 +196,35 @@ resource "aws_cloudwatch_metric_alarm" "high_memory" {
   period              = 60
   statistic           = "Average"
   threshold           = 80
-  alarm_description   = "Alarm if Memory > 80%"
+  alarm_description   = "Alarm when ECS memory exceeds 80%"
   dimensions = {
     ClusterName = aws_ecs_cluster.strapi_cluster.name
     ServiceName = aws_ecs_service.strapi_service.name
   }
 }
 
-# CloudWatch Dashboard
-resource "aws_cloudwatch_dashboard" "strapi_dashboard" {
-  dashboard_name = "StrapiDashboard"
-
+resource "aws_cloudwatch_dashboard" "ecs_dashboard" {
+  dashboard_name = "StrapiEcsDashboard"
   dashboard_body = jsonencode({
     widgets = [
       {
-        type = "metric"
-        x    = 0
-        y    = 0
-        width = 12
-        height = 6
+        type = "metric",
+        x = 0,
+        y = 0,
+        width = 12,
+        height = 6,
         properties = {
           metrics = [
-            ["AWS/ECS", "CPUUtilization", "ClusterName", aws_ecs_cluster.strapi_cluster.name, "ServiceName", aws_ecs_service.strapi_service.name],
-            ["AWS/ECS", "MemoryUtilization", "ClusterName", aws_ecs_cluster.strapi_cluster.name, "ServiceName", aws_ecs_service.strapi_service.name],
-            ["AWS/ECS", "NetworkIn", "ClusterName", aws_ecs_cluster.strapi_cluster.name, "ServiceName", aws_ecs_service.strapi_service.name],
-            ["AWS/ECS", "NetworkOut", "ClusterName", aws_ecs_cluster.strapi_cluster.name, "ServiceName", aws_ecs_service.strapi_service.name],
-            ["AWS/ECS", "RunningTaskCount", "ClusterName", aws_ecs_cluster.strapi_cluster.name, "ServiceName", aws_ecs_service.strapi_service.name]
-          ]
-          view = "timeSeries"
-          stacked = false
-          region = var.aws_region
-          title = "Strapi ECS Metrics"
+            [ "AWS/ECS", "CPUUtilization", "ClusterName", aws_ecs_cluster.strapi_cluster.name, "ServiceName", aws_ecs_service.strapi_service.name ],
+            [ ".", "MemoryUtilization", ".", ".", ".", "." ],
+            [ ".", "NetworkIn", ".", ".", ".", "." ],
+            [ ".", "NetworkOut", ".", ".", ".", "." ],
+            [ ".", "RunningTaskCount", ".", ".", ".", "." ]
+          ],
+          view = "timeSeries",
+          stacked = false,
+          region = var.aws_region,
+          title = "ECS Service Metrics"
         }
       }
     ]
