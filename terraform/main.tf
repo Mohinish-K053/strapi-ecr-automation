@@ -1,19 +1,3 @@
-variable "container_port" {
-  default = 1337
-}
-
-variable "ecr_image_uri" {
-  description = "ECR image URI"
-}
-
-variable "aws_region" {
-  default = "us-east-1"
-}
-
-provider "aws" {
-  region = var.aws_region
-}
-
 data "aws_vpc" "default" {
   default = true
 }
