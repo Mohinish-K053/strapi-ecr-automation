@@ -6,6 +6,12 @@ resource "aws_ecs_cluster" "strapi_cluster" {
   name = "strapi-cluster"
 }
 
+resource "aws_cloudwatch_log_group" "strapi_logs" {
+  name              = "/ecs/strapi"
+  retention_in_days = 7 # You can change this as needed
+}
+
+
 resource "aws_lb" "strapi_alb" {
   name               = "strapi-alb"
   internal           = false
@@ -128,6 +134,14 @@ resource "aws_ecs_task_definition" "strapi_task" {
         containerPort = var.container_port
         hostPort      = var.container_port
       }]
+       logConfiguration = {
+    logDriver = "awslogs"
+    options = {
+      awslogs-group         = aws_cloudwatch_log_group.strapi_logs.name
+      awslogs-region        = var.aws_region
+      awslogs-stream-prefix = "strapi"
+    }
+  }
       environment = [
         { name = "APP_KEYS",             value = "${join(",", [for i in range(4) : base64encode(uuid())])}" },
         { name = "API_TOKEN_SALT",       value = "${base64encode(uuid())}" },

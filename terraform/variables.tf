@@ -14,3 +14,9 @@ variable "ecr_image_uri" {
   description = "ECR image URI for the Docker image"
   type        = string
 }
+
+variable "aws_region" {
+  description = "AWS Region"
+  default     = "us-east-1" # or your desired region
+}
+
