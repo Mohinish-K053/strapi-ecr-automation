@@ -157,19 +157,27 @@ resource "aws_ecs_service" "strapi_service" {
   cluster         = aws_ecs_cluster.strapi_cluster.id
   task_definition = aws_ecs_task_definition.strapi_task.arn
   desired_count   = 1
-  launch_type     = "FARGATE"
+  
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE_SPOT"
+    weight            = 1
+  }
+
   network_configuration {
     subnets         = data.aws_subnets.default.ids
     security_groups = [aws_security_group.task_sg.id]
     assign_public_ip = true
   }
+
   load_balancer {
     target_group_arn = aws_lb_target_group.strapi_tg.arn
     container_name   = "strapi"
     container_port   = var.container_port
   }
+
   depends_on = [aws_lb_listener.strapi_listener]
 }
+
 
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   alarm_name          = "HighCPUUtilization"
